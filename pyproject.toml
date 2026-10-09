@@ -1,0 +1,28 @@
+[project]
+name = "opencode-voice"
+version = "0.1.0"
+description = "Local-first TTS daemon for OpenCode: Kokoro-82M via MLX on Apple Silicon"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "mlx>=0.31.1",
+    "mlx-audio>=0.5.8",
+    "misaki[en]>=0.9.4",
+    "numpy>=1.26.4",
+    "sounddevice>=0.5.3",
+]
+
+[project.scripts]
+tts-agent = "opencode_voice.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opencode_voice"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.lavish/
+
+# runtime state
+*.log
+*.pid

@@ -1,0 +1,23 @@
+[general]
+enabled = true
+voice = "af_heart"
+speed = 1.0
+
+[tts]
+model = "mlx-community/Kokoro-82M-bf16"
+
+[server]
+host = "127.0.0.1"
+port = 8765
+
+[speech]
+min_sentence_chars = 60
+max_sentence_chars = 400
+
+[behavior]
+interrupt_on_new_prompt = true
+idle_shutdown_s = 300
+
+[playback]
+backend = "auto"
+volume = 0.9
