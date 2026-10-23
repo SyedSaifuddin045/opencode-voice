@@ -143,4 +143,85 @@ export const VoicePlugin = async ({ project, client, $ }) => {
   };
 };
 
-export default VoicePlugin;
+// V2 (opencode >= 2.x) setup. The V2 plugin API replaces the V1 factory +
+// string-keyed hook object with a definition `{ id, setup(ctx) }`. The event
+// stream also renamed its types: V1 `message.part.updated`/`message.updated`/
+// `session.idle` became `session.text.delta`/`session.text.ended`/
+// `session.inbox.*`/`session.execution.*`. Event payloads live under
+// event.data. See https://opencode.ai/v2/docs/build/plugins/migrate-v1
+async function setup(ctx) {
+  // opencode launched: bring the daemon up in the background
+  ensureDaemon();
+
+  // V2 streams text as deltas, so accumulate the full text per assistant
+  // message part and send the running snapshot — the daemon diffs snapshots
+  // per partID and treats a repeated snapshot as a no-op.
+  const textByPart = new Map(); // `${assistantMessageID}:${ordinal}` -> full text
+
+  const controller = new AbortController();
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        const data = event && event.data;
+        if (!data) continue;
+
+        // --- streaming assistant text ---------------------------------
+        if (event.type === 'session.text.delta') {
+          const partID = data.assistantMessageID + ':' + data.ordinal;
+          const full = (textByPart.get(partID) || '') + (data.delta || '');
+          textByPart.set(partID, full);
+          await send('/stream', { sessionID: data.sessionID, partID, text: full });
+          continue;
+        }
+
+        // --- final snapshot for a text part ---------------------------
+        if (event.type === 'session.text.ended') {
+          const partID = data.assistantMessageID + ':' + data.ordinal;
+          const full = typeof data.text === 'string' ? data.text : (textByPart.get(partID) || '');
+          textByPart.set(partID, full);
+          await send('/stream', { sessionID: data.sessionID, partID, text: full });
+          continue;
+        }
+
+        // --- new user prompt: stop speech, reset stream state ---------
+        if (event.type === 'session.inbox.enqueued' &&
+            data.item && data.item.type === 'user') {
+          const messageID = data.inboxID || data.item.id;
+          if (messageID && !stoppedMessages.has(messageID)) {
+            stoppedMessages.add(messageID);
+            await send('/stop', {
+              sessionID: data.sessionID,
+              messageID,
+              source: 'session.inbox.enqueued',
+            });
+            textByPart.clear();
+          }
+          continue;
+        }
+
+        // --- flush remaining sentences when the turn completes --------
+        if (event.type === 'session.execution.succeeded' ||
+            event.type === 'session.execution.failed' ||
+            event.type === 'session.execution.interrupted' ||
+            event.type === 'session.idle') {
+          textByPart.clear();
+          await send('/flush', { sessionID: data.sessionID });
+          continue;
+        }
+      }
+    } catch (err) {
+      // Never let a subscription error break plugin activation.
+      console.error('[voice] event subscription ended:', err);
+    }
+  })();
+
+  return () => controller.abort();
+}
+
+// V1 factory, kept for dual compatibility with OpenCode 1.x. V2 reads the
+// default export below.
+export default {
+  id: 'voice',
+  server: VoicePlugin,
+  setup,
+};
