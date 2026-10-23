@@ -50,7 +50,14 @@ def _f32_to_wav_bytes(pcm: bytes, samplerate: int) -> bytes:
 
 
 class SoundDevicePlayer:
-    """Chunked blocking writes to a PortAudio stream (interruptible)."""
+    """Chunked blocking writes to a PortAudio output stream (interruptible).
+
+    Uses OutputStream (speakers only). sounddevice.Stream is duplex and
+    would open the microphone too; on Bluetooth headphones that switches
+    macOS into HFP/SCO mode, dropping music to 16 kHz mono and leaving it
+    muffled. Constructing the player must not touch audio either, so the
+    stream is opened lazily on the first play().
+    """
 
     def __init__(self, volume: float = 1.0):
         import sounddevice as sd
@@ -61,13 +68,6 @@ class SoundDevicePlayer:
         self._stream_rate = 0
         self._stop_evt = threading.Event()
         self._lock = threading.Lock()
-        # probe: can we open an output stream at all?
-        probe = sd.Stream(samplerate=24000, channels=1, dtype="float32")
-        try:
-            probe.start()
-            probe.stop()
-        finally:
-            probe.close()
 
     def play(self, pcm: bytes, samplerate: int) -> None:
         if self.volume != 1.0:
@@ -79,7 +79,7 @@ class SoundDevicePlayer:
         with self._lock:
             if self._stream is None or self._stream_rate != samplerate:
                 self._close_stream_locked()
-                self._stream = self._sd.Stream(
+                self._stream = self._sd.OutputStream(
                     samplerate=samplerate, channels=1, dtype="float32"
                 )
                 self._stream.start()

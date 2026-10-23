@@ -101,3 +101,101 @@ def test_afplay_play_and_interrupt(monkeypatch):
     assert p.current is None or p.current.killed is True
     # no leftover wavs
     assert list(tmp.glob("*.wav")) == []
+
+
+# --- sounddevice must never touch the audio device until speech plays ------
+
+class FakeOutputStream:
+    instances = []
+
+    def __init__(self, samplerate, channels, dtype):
+        self.samplerate = samplerate
+        self.channels = channels
+        self.dtype = dtype
+        self.frames = 0
+        self.started = False
+        self.closed = False
+        FakeOutputStream.instances.append(self)
+
+    @property
+    def active(self):
+        return self.started
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.started = False
+
+    def abort(self):
+        self.started = False
+
+    def close(self):
+        self.closed = True
+
+    def write(self, block):
+        self.frames += len(block)
+
+
+class FakeSd:
+    """Fake PortAudio. `Stream` is duplex (mic + speakers) and must never be used."""
+
+    def __init__(self):
+        self.duplex_calls = 0
+
+    def Stream(self, *args, **kwargs):
+        self.duplex_calls += 1
+        raise AssertionError(
+            "duplex sd.Stream opens the microphone and forces Bluetooth "
+            "headphones into HFP (16 kHz mono)"
+        )
+
+    def OutputStream(self, samplerate, channels, dtype):
+        return FakeOutputStream(samplerate, channels, dtype)
+
+
+def _player_with_fake_sd(monkeypatch):
+    import sys
+    import opencode_voice.playback as pb
+
+    fake = FakeSd()
+    monkeypatch.setitem(sys.modules, "sounddevice", fake)
+    FakeOutputStream.instances = []
+    return pb.SoundDevicePlayer(volume=1.0), fake
+
+
+def test_sounddevice_init_does_not_open_audio_stream(monkeypatch):
+    player, fake = _player_with_fake_sd(monkeypatch)
+    assert FakeOutputStream.instances == []
+    assert fake.duplex_calls == 0
+    player.close()
+
+
+def test_sounddevice_play_opens_output_only_stream(monkeypatch):
+    player, fake = _player_with_fake_sd(monkeypatch)
+    seconds = 0.5
+    pcm_in = pcm(*([0.0] * int(24000 * seconds)))
+    player.play(pcm_in, 24000)
+    assert fake.duplex_calls == 0  # never opens the microphone
+    assert len(FakeOutputStream.instances) == 1
+    stream = FakeOutputStream.instances[0]
+    assert stream.samplerate == 24000
+    assert stream.channels == 1
+    assert stream.frames == pytest.approx(int(24000 * seconds), abs=2)
+    player.close()
+
+
+def test_sounddevice_reuses_stream_at_same_rate(monkeypatch):
+    player, fake = _player_with_fake_sd(monkeypatch)
+    player.play(pcm(0.0, 0.1), 24000)
+    player.play(pcm(0.0, 0.1), 24000)
+    assert len(FakeOutputStream.instances) == 1
+    player.close()
+
+
+def test_sounddevice_reopens_stream_when_rate_changes(monkeypatch):
+    player, fake = _player_with_fake_sd(monkeypatch)
+    player.play(pcm(0.0, 0.1), 24000)
+    player.play(pcm(0.0, 0.1), 22050)
+    assert [s.samplerate for s in FakeOutputStream.instances] == [24000, 22050]
+    player.close()
